@@ -1,16 +1,18 @@
 // sunshine.cpp : Defines the entry point for the console application.
 
-#define global_variable static
-
-#include "global_defines.h"
-#include "sunshine.h"
 #include <windows.h>
 #include <windowsx.h>
-#include "win32_sunshine.h"
+
 #include <iostream>
 #include <stdio.h>
 #include <vector>
 #include <algorithm>
+
+#include "global_defines.h"
+#include "profiling.h"
+#include "win32_sunshine.h"
+
+#include "sunshine.h"
 
 global_variable win32_offscreen_buffer backBuffer;
 
@@ -19,6 +21,9 @@ global_variable bool IS_RUNNING;
 #ifndef RGBA
 #define RGBA(r,g,b,a)        ((COLORREF)( (((DWORD)(BYTE)(a))<<24) |     RGB(r,g,b) ))
 #endif
+
+int BUFFER_WIDTH = 640;
+int BUFFER_HEIGHT = 480;
 
 static void
 Win32InitBuffer(win32_offscreen_buffer *buffer, int width, int height)
@@ -47,16 +52,22 @@ Win32InitBuffer(win32_offscreen_buffer *buffer, int width, int height)
 
 
 static win32_window_dimension
-Win32GetWindowDimension(HWND Window)
+Win32GetRectDimension(RECT *Area)
 {
     win32_window_dimension Result;
-
-    RECT ClientRect;
-    GetClientRect(Window, &ClientRect);
-    Result.Width = ClientRect.right - ClientRect.left;
-    Result.Height = ClientRect.bottom - ClientRect.top;
-
+    Result.Width = Area->right - Area->left;
+    Result.Height = Area->bottom - Area->top;
     return(Result);
+}
+
+
+static RECT
+Win32GetAdjustedClientRect(HWND windowHandle)
+{
+    RECT ClientRect;
+    GetClientRect(windowHandle, &ClientRect);
+    AdjustWindowRect(&ClientRect, GetWindowStyle(windowHandle), GetMenu(windowHandle) != NULL);
+    return(ClientRect);
 }
 
 
@@ -76,8 +87,7 @@ Win32DisplayBufferInWindow(win32_offscreen_buffer *Buffer,
 void Win32UpdateWindowCallback()
 {
     HWND windowHandle = GetActiveWindow();
-    RECT ClientRect;
-    GetClientRect(windowHandle, &ClientRect);
+    RECT ClientRect = Win32GetAdjustedClientRect(windowHandle);
     InvalidateRect(windowHandle, &ClientRect, true);
     UpdateWindow(windowHandle);
 }
@@ -98,10 +108,21 @@ Win32WindowCallback(HWND windowHandle,
             PAINTSTRUCT paintStruct;
             HDC deviceContextHandle;
             deviceContextHandle = BeginPaint(windowHandle, &paintStruct);
-            win32_window_dimension Dimension = Win32GetWindowDimension(windowHandle);
+            RECT ClientRect;
+            GetClientRect(windowHandle, &ClientRect);
+            win32_window_dimension clientSize = Win32GetRectDimension(&ClientRect);
             Win32DisplayBufferInWindow(&backBuffer, deviceContextHandle,
-                                       Dimension.Width, Dimension.Height);
+                                       clientSize.Width, clientSize.Height);
             EndPaint(windowHandle, &paintStruct);
+        } break;
+
+        case WM_SIZE:
+        {
+            DWORD width = LOWORD(lParam);
+            DWORD height = HIWORD(lParam);
+            char message[256];
+            sprintf_s(message, "%i xPos %i yPos\n", width, height);
+            OutputDebugStringA(message);
         } break;
 
         case WM_DESTROY:
@@ -129,11 +150,12 @@ WinMain(HINSTANCE windowInstance,
     windowClass.style = CS_HREDRAW | CS_VREDRAW;
     windowClass.lpfnWndProc = Win32WindowCallback;
     windowClass.hInstance = windowInstance;
+    windowClass.hCursor= LoadCursor(NULL, IDC_ARROW);
     windowClass.hIcon = LoadIcon(windowInstance, MAKEINTRESOURCE(IDI_APPLICATION));
     windowClass.lpszClassName = "sunshineWindowClass";
 
-    int windowWidth = 500;
-    int windowHeight = 500;
+    // Get processor clock speed for profiling
+    QueryPerformanceFrequency(&_PCFreq);
 
     if (!RegisterClassA(&windowClass))
     {
@@ -144,12 +166,19 @@ WinMain(HINSTANCE windowInstance,
         return 1;
     }
 
+    RECT ClientRect = {0, 0, 640, 480};
+    AdjustWindowRect(&ClientRect,
+                     WS_OVERLAPPEDWINDOW,
+                     0);
+
+    win32_window_dimension clientInitialSize = Win32GetRectDimension(&ClientRect);
+
     HWND windowHandle = CreateWindow(
         windowClass.lpszClassName,
         "sunshine",
         WS_OVERLAPPEDWINDOW,
         CW_USEDEFAULT, CW_USEDEFAULT,
-        windowWidth, windowHeight,
+        clientInitialSize.Width, clientInitialSize.Height,
         NULL,
         NULL,
         windowInstance,
@@ -179,9 +208,10 @@ WinMain(HINSTANCE windowInstance,
                                                  PAGE_READWRITE);
 
     RaytracerMemory.PermanentStorage = winState.RaytracerMemoryBlock;
+
     IS_RUNNING = true;
 
-    Win32InitBuffer(&backBuffer, windowWidth, windowHeight);
+    Win32InitBuffer(&backBuffer, BUFFER_WIDTH, BUFFER_HEIGHT);
 
     sunshine_offscreen_buffer Buffer = {};
     Buffer.Memory = backBuffer.Memory;
@@ -190,90 +220,78 @@ WinMain(HINSTANCE windowInstance,
     Buffer.Pitch = backBuffer.Pitch;
     Buffer.BytesPerPixel = 4;
 
-    ShowWindow(windowHandle, showCode);
+    ShowWindow(windowHandle, 3);
     UpdateWindow(windowHandle);
-
-    // Timer
-    LARGE_INTEGER StartingTime, EndingTime, ElapsedMiliseconds;
-    LARGE_INTEGER Frequency;
-    QueryPerformanceFrequency(&Frequency);
-    //
 
     while (IS_RUNNING)
     {
-        QueryPerformanceCounter(&StartingTime);
-
         MSG message;
+        LARGE_INTEGER StartTime = GetCurrentClockCounter();
+
         while(PeekMessage(&message, 0, 0, 0, PM_REMOVE))
         {
-            UpdateAndRender(&RaytracerMemory, &Buffer, Win32UpdateWindowCallback);
-
-            RECT clientRect;
-            GetClientRect(windowHandle, &clientRect);
-            RECT windowRect;
-            GetWindowRect(windowHandle, &windowRect);
-            AdjustWindowRect(&clientRect, WS_OVERLAPPEDWINDOW, 0);
-
-            //POINT upperLeftCorner;
-            //POINT lowerRightCorner;
-            //GetClientRect(windowHandle, &clientRect);
-
-            //upperLeftCorner.x = clientRect.left;
-            //upperLeftCorner.y = clientRect.top;
-            //lowerRightCorner.x = clientRect.right + 1;
-            //lowerRightCorner.y = clientRect.bottom + 1;
-            //ClientToScreen(windowHandle, &upperLeftCorner);
-            //ClientToScreen(windowHandle, &lowerRightCorner);
-            //SetRect(&clientRect, upperLeftCorner.x, upperLeftCorner.y,
-                    //lowerRightCorner.x, lowerRightCorner.y);
+            //float aspectRatio = float(windowWidth) / windowHeight;
+            //char message1[256];
+            //sprintf_s(message1, "%.04f", aspectRatio);
 
             if(message.message == WM_QUIT)
             {
                 IS_RUNNING = false;
                 PostQuitMessage(0);
             }
-            if(message.message == WM_MOUSEMOVE)
+
+            if(message.message == WM_LBUTTONDOWN || message.message == WM_MOUSEMOVE)
             {
-                int xPos = GET_X_LPARAM(message.lParam);
-                int yPos = GET_Y_LPARAM(message.lParam);
-                //char message[256];
-                //POINT pos;
-                //pos.x = xPos;
-                //pos.y = yPos;
-                //ClientToScreen(windowHandle, &pos);
-                //xPos = pos.x - windowRect.left;
-                //yPos = pos.y - windowRect.top;
-                //sprintf_s(message, "%i xPos %i yPos\n", xPos, yPos);
-                ////xPos -= clientRect.left;
-                ////yPos -= clientRect.top;
-                //OutputDebugStringA(message);
-                //DrawRectangle(&Buffer, xPos - 10, yPos - 10, xPos + 10, yPos + 10);
-                DrawRectangle(&Buffer, xPos, yPos, xPos + 1, yPos + 1);
-                //DrawRectangle(&Buffer, pos.x, pos.y, pos.x + 2, pos.y + 2);
+                if (message.wParam & WM_LBUTTONDOWN)
+                {
+                    RECT ClientRect;
+                    GetClientRect(windowHandle, &ClientRect);
+                    win32_window_dimension clientSize = Win32GetRectDimension(&ClientRect);
+
+                    int xPos = GET_X_LPARAM(message.lParam);
+                    int yPos = GET_Y_LPARAM(message.lParam);
+                    float x = xPos / (clientSize.Width / float(BUFFER_WIDTH));
+                    float y = yPos / (clientSize.Height / float(BUFFER_HEIGHT));
+
+                    xPos = int(round(x));
+                    yPos = int(round(y));
+
+                    char message[256];
+                    sprintf_s(message, "%i xPos %i yPos\n", xPos, yPos);
+
+                    //OutputDebugStringA(message);
+                    //DrawRectangle(&Buffer, xPos, yPos, xPos + 15, yPos + 15);
+                    DrawCircle(&Buffer, xPos, yPos, 30);
+                }
             }
 
             TranslateMessage(&message);
             DispatchMessageA(&message);
 
-            UpdateAndRender(&RaytracerMemory, &Buffer, Win32UpdateWindowCallback);
         }
 
-        RaytracerMemory.offset++;
+        UpdateAndRender(&RaytracerMemory, &Buffer, Win32UpdateWindowCallback);
 
-        // Timer
-        QueryPerformanceCounter(&EndingTime);
-        ElapsedMiliseconds.QuadPart = EndingTime.QuadPart - StartingTime.QuadPart;
-        ElapsedMiliseconds.QuadPart *= 1000;
-        ElapsedMiliseconds.QuadPart /= Frequency.QuadPart;
+        RaytracerMemory.offset += 0.01f;
+        if (RaytracerMemory.offset == 1.0f)
+        {
+            RaytracerMemory.offset = 0;
+        }
 
-        int FPS = min((int)(1 / (ElapsedMiliseconds.QuadPart / 1000.0)), 9999);
+        LARGE_INTEGER EndTime = GetCurrentClockCounter();
+        float msElapsed = GetMilisecondsElapsed(StartTime, EndTime);
 
-        char msPerFrameBuffer[256];
-        sprintf_s(msPerFrameBuffer, "%i ms/f %i FPS\n",
-                  ElapsedMiliseconds.QuadPart,
-                  FPS);
-        //OutputDebugStringA(msPerFrameBuffer);
-        //
+        float targetMsPerFrame = 16.6f;
+
+        if (msElapsed < targetMsPerFrame)
+        {
+             Sleep(DWORD(targetMsPerFrame - msElapsed));
+        }
+        //PrintTime(msElapsed, "Before sleep");
+
+        LARGE_INTEGER AfterSleepTime = GetCurrentClockCounter();
+        msElapsed = GetMilisecondsElapsed(StartTime, AfterSleepTime);
+        //PrintTime(msElapsed, "GAME LOOP");
     }
 
     return 0;

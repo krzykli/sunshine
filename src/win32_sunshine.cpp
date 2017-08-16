@@ -22,8 +22,8 @@ global_variable bool IS_RUNNING;
 #define RGBA(r,g,b,a)        ((COLORREF)( (((DWORD)(BYTE)(a))<<24) |     RGB(r,g,b) ))
 #endif
 
-int BUFFER_WIDTH = 640;
-int BUFFER_HEIGHT = 480;
+int BUFFER_WIDTH = 32;
+int BUFFER_HEIGHT = 32;
 
 static void
 Win32InitBuffer(win32_offscreen_buffer *buffer, int width, int height)
@@ -166,12 +166,12 @@ WinMain(HINSTANCE windowInstance,
         return 1;
     }
 
-    RECT ClientRect = {0, 0, 640, 480};
+    RECT ClientRect = {0, 0, BUFFER_WIDTH, BUFFER_HEIGHT};
     AdjustWindowRect(&ClientRect,
                      WS_OVERLAPPEDWINDOW,
                      0);
 
-    win32_window_dimension clientInitialSize = Win32GetRectDimension(&ClientRect);
+    win32_window_dimension clientInitialSize = {20 * BUFFER_WIDTH, 20 * BUFFER_HEIGHT};
 
     HWND windowHandle = CreateWindow(
         windowClass.lpszClassName,
@@ -242,26 +242,30 @@ WinMain(HINSTANCE windowInstance,
 
             if(message.message == WM_LBUTTONDOWN || message.message == WM_MOUSEMOVE)
             {
+                RECT ClientRect;
+                GetClientRect(windowHandle, &ClientRect);
+                win32_window_dimension clientSize = Win32GetRectDimension(&ClientRect);
+
+                int xPos = GET_X_LPARAM(message.lParam);
+                int yPos = GET_Y_LPARAM(message.lParam);
+                float x = float(xPos) / (float(clientSize.Width) / float(BUFFER_WIDTH));
+                float y = float(yPos) / (float(clientSize.Height) / float(BUFFER_HEIGHT));
+
+                //xPos = int(roundf(x));
+                //yPos = BUFFER_HEIGHT - 1 - int(roundf(y));
+                xPos = int(roundf(x - 0.5f));
+                yPos = BUFFER_HEIGHT - 1 - int(roundf(y - 0.5f));
+
                 if (message.wParam & WM_LBUTTONDOWN)
                 {
-                    RECT ClientRect;
-                    GetClientRect(windowHandle, &ClientRect);
-                    win32_window_dimension clientSize = Win32GetRectDimension(&ClientRect);
-
-                    int xPos = GET_X_LPARAM(message.lParam);
-                    int yPos = GET_Y_LPARAM(message.lParam);
-                    float x = xPos / (clientSize.Width / float(BUFFER_WIDTH));
-                    float y = yPos / (clientSize.Height / float(BUFFER_HEIGHT));
-
-                    xPos = int(round(x));
-                    yPos = int(round(y));
 
                     char message[256];
                     sprintf_s(message, "%i xPos %i yPos\n", xPos, yPos);
 
-                    //OutputDebugStringA(message);
-                    //DrawRectangle(&Buffer, xPos, yPos, xPos + 15, yPos + 15);
-                    DrawCircle(&Buffer, xPos, yPos, 30);
+                    //DrawRectangle(&Buffer, 0, 0, xPos, yPos, true);
+                    DrawLine(&Buffer, Buffer.Width / 2, Buffer.Height / 2, xPos, yPos);
+                    //DrawCircle(&Buffer, xPos, yPos, 8, true);
+                    OutputDebugStringA(message);
                 }
             }
 
@@ -282,12 +286,10 @@ WinMain(HINSTANCE windowInstance,
         float msElapsed = GetMilisecondsElapsed(StartTime, EndTime);
 
         float targetMsPerFrame = 16.6f;
-
         if (msElapsed < targetMsPerFrame)
         {
              Sleep(DWORD(targetMsPerFrame - msElapsed));
         }
-        //PrintTime(msElapsed, "Before sleep");
 
         LARGE_INTEGER AfterSleepTime = GetCurrentClockCounter();
         msElapsed = GetMilisecondsElapsed(StartTime, AfterSleepTime);

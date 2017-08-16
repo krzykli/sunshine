@@ -96,7 +96,7 @@ void*
 GetPixelAddress(sunshine_offscreen_buffer *Buffer, int x, int y)
 {
     uint8 *row = (uint8 *)Buffer->Memory;
-    int offsetFromOrigin = y * Buffer->Pitch + Buffer->BytesPerPixel * x;
+    int offsetFromOrigin = (Buffer->Height - 1 - y) * Buffer->Pitch + Buffer->BytesPerPixel * x;
     return row += offsetFromOrigin;
 }
 
@@ -110,56 +110,6 @@ ColorPixel(sunshine_offscreen_buffer *Buffer, uint32 Color, int x, int y)
     }
 }
 
-
-void
-DrawCircle(sunshine_offscreen_buffer *Buffer, int x0, int y0, int radius)
-{
-
-    LARGE_INTEGER StartTime = GetCurrentClockCounter();
-
-    uint8 Red = 255;
-    uint8 Green = 0;
-    uint8 Blue = 0;
-    uint32 Color = ((Red << 16) | (Green << 8) | Blue);
-
-    int x = radius - 1;
-    int y = 0;
-    int dx = 1;
-    int dy = 1;
-    int err = dx - (radius << 1);
-
-    while (x >= y)
-    {
-        ColorPixel(Buffer, Color, x0 + x, y0 + y);
-        ColorPixel(Buffer, Color, x0 + y, y0 + x);
-        ColorPixel(Buffer, Color, x0 - y, y0 - x);
-        ColorPixel(Buffer, Color, x0 - x, y0 - y);
-        ColorPixel(Buffer, Color, x0 - x, y0 + y);
-        ColorPixel(Buffer, Color, x0 + x, y0 - y);
-        ColorPixel(Buffer, Color, x0 - y, y0 + x);
-        ColorPixel(Buffer, Color, x0 + y, y0 - x);
-
-        if (err <= 0)
-        {
-            y++;
-            err += dy;
-            dy +=2;
-        }
-        if (err > 0)
-        {
-            x--;
-            dx += 2;
-            err += (-radius << 1) + dx;
-        }
-    }
-
-
-    LARGE_INTEGER EndTime = GetCurrentClockCounter();
-    char msPerFrameBuffer[512];
-    sprintf_s(msPerFrameBuffer, "Ticks: %i\n", EndTime.QuadPart - StartTime.QuadPart);
-    OutputDebugStringA(msPerFrameBuffer);
-
-}
 
 bool
 IsAddressWithinFrameBufferBounds(sunshine_offscreen_buffer *Buffer, void* Pixel)
@@ -178,14 +128,16 @@ IsAddressWithinFrameBufferBounds(sunshine_offscreen_buffer *Buffer, void* Pixel)
 
 
 void
-DrawRectangle(sunshine_offscreen_buffer *Buffer, int x1, int y1, int x2, int y2)
+DrawRectangle(sunshine_offscreen_buffer *Buffer, int x1, int y1, int x2, int y2, bool fill)
 {
     // NOTE(kk): assume for now point A has lower coords
-    //
     // Check bounds
+    x1 = max(x1, 0);
+    y1 = max(y1, 0);
+
     x2 = min(x2, Buffer->Width - 1);
     y2 = min(y2, Buffer->Height - 1);
-    
+
     uint8 Red = 240;
     uint8 Green = 30;
     uint8 Blue = 140;
@@ -197,46 +149,174 @@ DrawRectangle(sunshine_offscreen_buffer *Buffer, int x1, int y1, int x2, int y2)
         uint32 *Pixel = (uint32 *)row;
         for (int x = x1; x <= x2; ++x)
         {
-            if (IsAddressWithinFrameBufferBounds(Buffer, Pixel))
-            {
-                *Pixel++ = ((Red << 16) | (Green << 8) | Blue);
-            }
+            *Pixel++ = ((Red << 16) | (Green << 8) | Blue);
         }
-        row += Buffer->Pitch;
+        row -= Buffer->Pitch;
     }
 }
 
 
 void
-DrawLine(sunshine_offscreen_buffer *Buffer, int x1, int y1, int x2, int y2,
-        int thickness)
+DrawLine(sunshine_offscreen_buffer *Buffer, int x1, int y1, int x2, int y2)
 {
+    LARGE_INTEGER StartTime = GetCurrentClockCounter();
+
+    // Check bounds
+    int xA = max(x1, 0);
+    xA = min(xA, Buffer->Width - 1);
+    int yA = max(y1, 0);
+    yA = min(yA, Buffer->Height - 1);
+
+    int xB = min(x2, Buffer->Width - 1);
+    xB = min(xB, Buffer->Width - 1);
+    int yB = max(y2, 0);
+    yB = min(yB, Buffer->Height - 1);
+
     uint8 Red = 0;
     uint8 Green = 100;
     uint8 Blue = 255;
 
-    int dx = x2 - x1;
-    int dy = y2 - y1;
+    int dx = xB - xA;
+    int dy = yB - yA;
 
     float a;
-    if (dx == 0 || dy == 0)
+
+    if (dx == 0)
     {
-        DrawRectangle(Buffer, x1, y1, x2, y2);
+        uint8 *row = (uint8 *)GetPixelAddress(Buffer, xA, yA);
+        for (int y = yA; y <= yB; ++y)
+        {
+            uint32 *Pixel = (uint32 *)row;
+            *Pixel++ = ((Red << 16) | (Green << 8) | Blue);
+            row -= Buffer->Pitch;
+        }
     }
+
+    if (dy == 0)
+    {
+        uint32 *Pixel= (uint32 *)GetPixelAddress(Buffer, xA, yA);
+        for (int x = xA; x <= xB; ++x)
+        {
+            *Pixel++ = ((Red << 16) | (Green << 8) | Blue);
+        }
+    }
+
     else
     {
-        a = float(dy) / dx;
-
-        for (int t = thickness; t > 0; t--)
+        if (abs(dx) >= abs(dy))
         {
-            for (int x = x1; x <= x2; ++x)
+            a = float(dy) / float(dx);
+            float b = yA - a * xA;
+            int step_dx = (xA > xB) ? -1 : 1;
+            if (step_dx == 1)
             {
-                float y = a * x + y1 + t;
-                uint32 *Pixel = (uint32 *)GetPixelAddress(Buffer, int(x), int(y));
-                *Pixel++ = ((Red << 16) | (Green << 8) | Blue);
+                for (int x = xA; x <= xB; x += step_dx)
+                {
+                    float y = a * x + b;
+                    uint32 *Pixel = (uint32 *)GetPixelAddress(Buffer, int(x), int(y));
+                    *Pixel = ((Red << 16) | (Green << 8) | Blue);
+                }
+            }
+            else
+            {
+                for (int x = xA; x >= xB; x += step_dx)
+                {
+                    float y = a * x + b;
+                    uint32 *Pixel = (uint32 *)GetPixelAddress(Buffer, int(x), int(y));
+                    *Pixel = ((Red << 16) | (Green << 8) | Blue);
+                }
+            }
+        }
+        else
+        {
+            a = float(dx) / float(dy);
+            float b = xA - a * yA;
+            int step_dy = (yA > yB) ? -1 : 1;
+            if (step_dy == 1)
+            {
+                for (int y = yA; y <= yB; y += step_dy)
+                {
+                    float x = a * y + b;
+                    uint32 *Pixel = (uint32 *)GetPixelAddress(Buffer, int(x), int(y));
+                    *Pixel = ((Red << 16) | (Green << 8) | Blue);
+                }
+            }
+            else
+            {
+                for (int y = yA; y >= yB; y += step_dy)
+                {
+                    float x = a * y + b;
+                    uint32 *Pixel = (uint32 *)GetPixelAddress(Buffer, int(x), int(y));
+                    *Pixel = ((Red << 16) | (Green << 8) | Blue);
+                }
             }
         }
     }
+
+    LARGE_INTEGER EndTime = GetCurrentClockCounter();
+    char msPerFrameBuffer[512];
+    sprintf_s(msPerFrameBuffer, "Ticks: %i\n", EndTime.QuadPart - StartTime.QuadPart);
+    OutputDebugStringA(msPerFrameBuffer);
+}
+
+
+void
+DrawCircle(sunshine_offscreen_buffer *Buffer, int x0, int y0, int radius, bool fill)
+{
+
+    LARGE_INTEGER StartTime = GetCurrentClockCounter();
+
+    uint8 Red = 30;
+    uint8 Green = 30;
+    uint8 Blue = 30;
+    uint32 Color = ((Red << 16) | (Green << 8) | Blue);
+
+    int x = radius - 1;
+    int y = 0;
+    int dx = 1;
+    int dy = 1;
+    int err = dx - (radius << 1);
+
+    while (x >= y)
+    {
+        if (fill)
+        {
+            DrawLine(Buffer, -y + x0, x + y0, y + x0, x + y0);
+            DrawLine(Buffer, -x + x0, y + y0, x + x0, y + y0);
+            DrawLine(Buffer, -x + x0, -y + y0, x + x0, -y + y0);
+            DrawLine(Buffer, -y + x0, -x + y0, y + x0, -x + y0);
+        }
+        else
+        {
+            ColorPixel(Buffer, Color, x0 + x, y0 + y);
+            ColorPixel(Buffer, Color, x0 + y, y0 + x);
+            ColorPixel(Buffer, Color, x0 - y, y0 - x);
+            ColorPixel(Buffer, Color, x0 - x, y0 - y);
+            ColorPixel(Buffer, Color, x0 - x, y0 + y);
+            ColorPixel(Buffer, Color, x0 + x, y0 - y);
+            ColorPixel(Buffer, Color, x0 - y, y0 + x);
+            ColorPixel(Buffer, Color, x0 + y, y0 - x);
+        }
+
+
+        if (err <= 0)
+        {
+            y++;
+            err += dy;
+            dy +=2;
+        }
+        if (err > 0)
+        {
+            x--;
+            dx += 2;
+            err += (-radius << 1) + dx;
+        }
+    }
+
+    LARGE_INTEGER EndTime = GetCurrentClockCounter();
+    char msPerFrameBuffer[512];
+    sprintf_s(msPerFrameBuffer, "Ticks: %i\n", EndTime.QuadPart - StartTime.QuadPart);
+    OutputDebugStringA(msPerFrameBuffer);
 }
 
 void
@@ -270,39 +350,20 @@ UpdateAndRender(raytracer_memory *Memory,
         for (int x=0; x < Buffer->Width; ++x)
         {
             //float u = float(x) / (Buffer->Width - 1);
-            //float v = float(y) / (Buffer->Height - 1);
+            //float v = (Buffer->Height - float(y)) / (Buffer->Height - 1);
 
 
             //Color3f colorUpperX = lerpColor3f(corner1, corner2, u);
-            ////Color3f colorLowerX = lerpColor3f(corner3, corner4, u);
-            ////Color3f color = lerpColor3f(colorUpperX, colorLowerX, v);
+            //Color3f colorLowerX = lerpColor3f(corner3, corner4, u);
+            //Color3f color = lerpColor3f(colorUpperX, colorLowerX, v);
 
             //*Pixel++ = Color3f_to_uint32(colorUpperX);
+            //*Pixel++ = Color3f_to_uint32(color);
         }
-
 
         row += Buffer->Pitch;
     }
-    //DrawRectangle(Buffer, 0, 0, 20, 20);
-    //DrawRectangle(Buffer, Buffer->Width - 20, Buffer->Height - 20,
-                  //Buffer->Width - 1, Buffer->Height - 1);
-    //DrawLine(Buffer, 0, 0, Buffer->Width - 1, Buffer->Height - 1, 5);
-    //DrawLine(Buffer, 0, Buffer->Height - 1, Buffer->Width - 1, 0, 3);
-    //DrawLine(Buffer, 0, 50, Buffer->Width - 1, 50, 3);
-    //DrawLine(Buffer, 0, 150, Buffer->Width - 1, 150, 3);
-    //DrawLine(Buffer, 100, 150, 200, 200, 2);
-    //DrawLine(Buffer, 100, 150, 200, 150, 5);
-    //DrawLine(Buffer, 100, 150, 100, 300, 2);
-    //DrawLine(Buffer, 200, 150, 200, 300, 5);
-    //DrawLine(Buffer, 100, 300, 200, 300, 5);
-    //DrawCircle(Buffer, 30, 30, 15);
-    //DrawCircle(Buffer, 300, 300, 100);
-    //DrawCircle(Buffer, 300, 300, 100);
-    //DrawCircle(Buffer, 300, 300, 100);
-    //DrawCircle(Buffer, 300, 300, 100);
-    //DrawCircle(Buffer, 300, 300, 100);
-    //DrawCircle(Buffer, 300, 300, 100);
-    //DrawCircle(Buffer, 300, 300, 100);
+
 
     WindowUpdateCallback();
 }
